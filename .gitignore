@@ -1,0 +1,18 @@
+# Build outputs
+*.o
+*.d
+*.dylib
+*.dSYM/
+.DS_Store
+__pycache__/
+
+# Test and tool binaries (sources are tracked, binaries are not)
+tests/*
+!tests/*.c
+!tests/*.cpp
+!tests/*.h
+!tests/*.ent
+!tests/*.sh
+!tests/*.py
+!tests/README*
+tools/offset_probe

@@ -1,0 +1,458 @@
+// ohv_context.h - Layout of the user-mapped vCPU context (2 x 16 KiB pages).
+//
+// The kernel maps one arm_guest_context_t per vCPU into the process. Page 0
+// is read/write scratch shared with the hypervisor, page 1 is the read-only
+// exit/state page. Field order mirrors the kernel's own guest state layout.
+// What every layout shares is pinned here by static_assert; where the rest
+// sits depends on the kernel and comes from ohv_hv_layouts.h (see below).
+#ifndef OHV_CONTEXT_H
+#define OHV_CONTEXT_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include "ohv_core.h"
+#include "ohv_hv_layouts.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define OHV_PAGE_SIZE       0x4000ull /* 16 KiB (arm64 Apple) */
+#define OHV_CONTEXT_SIZE    (2 * OHV_PAGE_SIZE)
+#define OHV_RO_PAGE_OFFSET  OHV_PAGE_SIZE
+
+// Interface version word found at ro.ver: {magic " hyp"}<<32|major<<24|su<<16|minor.
+#define OHV_STATE_VER_MAGIC 0x20687970ull
+#define OHV_STATE_VER(major, su, minor) \
+    ((OHV_STATE_VER_MAGIC << 32) | ((uint64_t)(major) << 24) | ((uint64_t)(su) << 16) | (uint64_t)(minor))
+
+// ---- shared (unbanked) system registers -----------------------------------
+typedef struct {
+    uint64_t mdscr_el1;
+    uint64_t tpidr_el1;
+    uint64_t tpidr_el0;
+    uint64_t tpidrro_el0;
+    uint64_t sp_el0;
+    uint64_t sp_el1;
+    uint64_t par_el1;
+    uint64_t csselr_el1;
+    uint64_t apstate;
+    uint64_t afpcr_el0;
+    uint64_t scxtnum_el0;
+    uint64_t tpidr2_el0;
+    uint64_t smpri_el1;
+} ohv_shared_sysregs_t;
+
+// ---- banked EL1 sysregs ----------------------------------------------------
+typedef struct {
+    uint64_t ttbr0_el1;
+    uint64_t ttbr1_el1;
+    uint64_t tcr_el1;
+    uint64_t elr_el1;
+    uint64_t far_el1;
+    uint64_t esr_el1;
+    uint64_t mair_el1;
+    uint64_t amair_el1;
+    uint64_t vbar_el1;
+    uint64_t cntv_cval_el0;
+    uint64_t cntp_cval_el0;
+    uint64_t actlr_el1;
+    uint64_t sctlr_el1;
+    uint64_t cpacr_el1;
+    uint64_t spsr_el1;
+    uint64_t afsr0_el1;
+    uint64_t afsr1_el1;
+    uint64_t contextidr_el1;
+    uint64_t cntv_ctl_el0;
+    uint64_t cntp_ctl_el0;
+    uint64_t cntkctl_el1;
+    uint64_t ich_vmcr_el2;   // aggregated view of ICV_*_EL1 RW fields
+    uint64_t scxtnum_el1;
+    uint64_t smcr_el1;
+} ohv_banked_sysregs_t;
+
+// ---- debug registers --------------------------------------------------------
+typedef struct {
+    struct { uint64_t bvr; uint64_t bcr; } bp[16];
+    struct { uint64_t wvr; uint64_t wcr; } wp[16];
+    uint64_t mdccint_el1;
+    uint64_t osdtrrx_el1;
+    uint64_t osdtrtx_el1;
+    uint8_t  dbgclaim_el1;
+} ohv_dbgregs_t;
+
+// ---- VGIC CPU-interface pair ------------------------------------------------
+typedef struct {
+    uint64_t ich_ap0r0_el2;
+    uint64_t ich_ap1r0_el2;
+} ohv_vgic_sysregs_t;
+
+// ---- run controls (RW page copy + RO page mirror) ---------------------------
+enum {
+    OHV_TIMER_MASK = 1ull << 0,
+};
+enum {
+    OHV_ICH_LR_DIRTY = 1ull << 32,
+};
+typedef struct {
+    uint64_t hcr_el2;
+    uint64_t hacr_el2;
+    uint64_t cptr_el2;
+    uint64_t mdcr_el2;
+    uint64_t vmpidr_el2;
+    uint64_t vpidr_el2;
+    uint64_t virtual_timer_offset;
+    uint64_t hfgrtr_el2;
+    uint64_t hfgwtr_el2;
+    uint64_t hfgitr_el2;
+    uint64_t hdfgrtr_el2;
+    uint64_t hdfgwtr_el2;
+    uint64_t cnthctl_el2;
+    uint64_t timer;
+    uint64_t vmkeyhi_el2;
+    uint64_t vmkeylo_el2;
+    uint64_t apsts_el1;
+    uint64_t ich_hcr_el2;
+    uint64_t ich_lr_el2[8];
+    uint64_t hcrx_el2;
+} ohv_controls_t;
+
+// ---- frozen bits ------------------------------------------------------------
+typedef struct {
+    uint64_t actlr_el1; // only EnTSO lockable
+} ohv_frozen_t;
+
+// ---- Apple private SPRs (GXF / SPRR / CTRR / PPL keys / GL1 bank / JIT) -----
+typedef struct {
+    uint64_t amx_state_t_el1;
+    uint64_t amx_config_el1;
+    uint64_t aspsr_el1;
+    uint64_t ctrr_ctl_el1;
+    uint64_t ctrr_lock_el1;
+    uint64_t ctrr_a_lwr_el1;
+    uint64_t ctrr_a_upr_el1;
+    uint64_t ctrr_b_lwr_el1;
+    uint64_t ctrr_b_upr_el1;
+    uint64_t ctrr_c_lwr_el1;
+    uint64_t ctrr_c_upr_el1;
+    uint64_t ctrr_c_ctl_el1;
+    uint64_t ctrr_d_lwr_el1;
+    uint64_t ctrr_d_upr_el1;
+    uint64_t ctrr_d_ctl_el1;
+    uint64_t ctxr_a_lwr_el1;
+    uint64_t ctxr_a_upr_el1;
+    uint64_t ctxr_a_ctl_el1;
+    uint64_t ctxr_b_lwr_el1;
+    uint64_t ctxr_b_upr_el1;
+    uint64_t ctxr_b_ctl_el1;
+    uint64_t ctxr_c_lwr_el1;
+    uint64_t ctxr_c_upr_el1;
+    uint64_t ctxr_c_ctl_el1;
+    uint64_t ctxr_d_lwr_el1;
+    uint64_t ctxr_d_upr_el1;
+    uint64_t ctxr_d_ctl_el1;
+    uint64_t vmsa_lock_el1;
+    uint64_t pmcr1_el1;
+    uint64_t apctl_el1;
+    uint64_t apgakeyhi_el1;
+    uint64_t apgakeylo_el1;
+    uint64_t apiakeyhi_el1;
+    uint64_t apiakeylo_el1;
+    uint64_t apibkeyhi_el1;
+    uint64_t apibkeylo_el1;
+    uint64_t apdakeyhi_el1;
+    uint64_t apdakeylo_el1;
+    uint64_t apdbkeyhi_el1;
+    uint64_t apdbkeylo_el1;
+    uint64_t kernkeyhi_el1;
+    uint64_t kernkeylo_el1;
+    uint64_t gxf_config_el1;
+    uint64_t gxf_entry_el1;
+    uint64_t gxf_pabentry_el1;
+    uint64_t sp_gl1;
+    uint64_t tpidr_gl1;
+    uint64_t aspsr_gl1;
+    uint64_t vbar_gl1;
+    uint64_t far_gl1;
+    uint64_t esr_gl1;
+    uint64_t elr_gl1;
+    uint64_t spsr_gl1;
+    uint64_t pmcr1_gl1;
+    uint64_t afsr1_gl1;
+    uint64_t sprr_config_el1;
+    uint64_t sprr_amrange_el1;
+    uint64_t sprr_pperm_el1;
+    uint64_t sprr_uperm_el0;
+    uint64_t sprr_pmprr_el1;
+    uint64_t sprr_umprr_el1;
+    uint64_t sprr_pperm_sh1_el1;
+    uint64_t sprr_pperm_sh2_el1;
+    uint64_t sprr_pperm_sh3_el1;
+    uint64_t sprr_pperm_sh4_el1;
+    uint64_t sprr_pperm_sh5_el1;
+    uint64_t sprr_pperm_sh6_el1;
+    uint64_t sprr_pperm_sh7_el1;
+    uint64_t sprr_uperm_sh1_el1;
+    uint64_t sprr_uperm_sh2_el1;
+    uint64_t sprr_uperm_sh3_el1;
+    uint64_t sprr_uperm_sh4_el1;
+    uint64_t sprr_uperm_sh5_el1;
+    uint64_t sprr_uperm_sh6_el1;
+    uint64_t sprr_uperm_sh7_el1;
+    uint64_t acfg_el1;
+    uint64_t jrange_el1;
+    uint64_t jctl_el1;
+    uint64_t japiakeyhi_el1;
+    uint64_t japiakeylo_el1;
+    uint64_t japibkeyhi_el1;
+    uint64_t japibkeylo_el1;
+    uint64_t agtcntrdir_el1;
+} ohv_extregs_t;
+
+// Binary-verified anchors (framework internals):
+/*
+ * The register block starts one word into the page.  Measured against a live
+ * vCPU: X11 reads back at +0x060 (so X0 is at +0x008), PC at +0x108 and
+ * PSTATE at +0x110 -- the same frame the ext-register anchors below were
+ * written against.  The kernel takes PC from +0x108, so with the old offsets
+ * a vCPU never received an entry point and no guest executed an instruction;
+ * the smoke test passed by reading its own misplaced write back.
+ */
+#define OHV_RW_HEAD             0x000
+#define OHV_RW_REGS_X0          0x008
+#define OHV_RW_FP               0x0f0
+#define OHV_RW_LR               0x0f8
+#define OHV_RW_SP               0x100
+#define OHV_RW_PC               0x108
+#define OHV_RW_CPSR             0x110
+#define OHV_RW_NEON_Q0          0x140
+#define OHV_RW_FPSR             0x340
+#define OHV_RW_FPCR             0x344
+#define OHV_RW_SHARED_SYSREGS   0x350
+#define OHV_RW_BANKED_SYSREGS   0x3b8
+
+/*
+ * Everything after the banked registers moves with the kernel.  Each
+ * Hypervisor interface version has grown a block somewhere in the middle --
+ * the debug block, the vGIC pair, the run controls -- and pushed the rest
+ * along: the controls are at 0x6a8 under 3.0.0, 0x920 from 3.0.2, and the
+ * state words and extended registers behind them moved again at 3.0.4, as
+ * did the RO page's tail.  A block only ever gains members at its end, so a
+ * member's place inside its block, and the typed blocks above, hold for
+ * every layout; only where each block starts has to be looked up.
+ *
+ * ohv_hv_layouts.h is that lookup, one row per version, read out of each
+ * Kernel Debug Kit's DWARF (lbr77/hv-layouts generates it; the file here is
+ * its generated/ohv_hv_layouts.h, unmodified).  The first vCPU picks its row
+ * from the version word the kernel wrote at ro.ver, and a kernel with no row
+ * is refused rather than guessed at: a newer kernel needs a newer copy of
+ * that file, not a newer offset in this one.
+ */
+extern const ohv_hv_layout_t *ohv_layout __attribute__((visibility("hidden")));
+#define OHV_L(field)            ((uint64_t)ohv_layout->field.off)
+
+#define OHV_RW_DBGREGS          OHV_L(rw_dbgregs)
+#define OHV_RW_VGIC_SYSREGS     OHV_L(rw_vgic_sysregs)
+#define OHV_RW_CONTROLS         OHV_L(rw_controls)
+#define OHV_RW_VTIMER_OFFSET    OHV_L(rw_vtimer_offset)   /* controls + 0x30 */
+#define OHV_RW_TIMER            OHV_L(rw_timer)           /* controls + 0x68 */
+#define OHV_RW_FROZEN           OHV_L(rw_frozen)
+#define OHV_RW_STATE_DIRTY      OHV_L(rw_state_dirty)
+#define OHV_RW_GUEST_TICKS      OHV_L(rw_guest_ticks)
+#define OHV_RW_EXTREGS          OHV_L(rw_extregs)
+/*
+ * SPSR_GL1, inside the extended registers.  A guarded return has somewhere to
+ * return to and this describes it; outside guarded state nothing has written
+ * it and it reads zero, which is what separates a guarded ERET from an
+ * ordinary one.
+ *
+ * The word at 0x390 goes to one across a GENTER and looked like the guarded
+ * level itself, and it is what the probe and the VMM both read.  On this
+ * machine's firmware it holds 2 before GXF has been touched at all -- it is
+ * also a shared system register slot -- so it says nothing here.
+ */
+#define OHV_EXT_SPSR_GL1        (OHV_RW_EXTREGS + offsetof(ohv_extregs_t, spsr_gl1))
+
+/*
+ * The guest hypervisor's own EL2 registers, which are separate from the run
+ * controls above: those are what this library programs to run the guest, and
+ * these are what the guest believes it has.  They live in a VNCR page at
+ * 0x1000, at the offsets the architecture defines for one.  Five of them were
+ * measured by writing each through the framework and finding where it landed
+ * -- VTTBR_EL2, VTCR_EL2, CNTVOFF_EL2, HCR_EL2 and TPIDR_EL2 -- and each
+ * landed exactly where the table below says, which is what identifies the
+ * page as such.
+ */
+#define OHV_VNCR_BASE           0x1000
+
+#define OHV_NESTED_VTTBR_EL2    0x1020
+#define OHV_NESTED_VTCR_EL2     0x1040
+#define OHV_NESTED_CNTVOFF_EL2  0x1060
+#define OHV_NESTED_HCR_EL2      0x1078
+#define OHV_NESTED_TPIDR_EL2    0x1090
+
+#define OHV_RW_VNCR             0x1000  /* 4 KiB aligned inside the 16 KiB page */
+#define OHV_RW_AVNCR            0x2000
+
+#define OHV_RO_VER              0x4000
+/*
+ * Where the kernel describes the exit it just took.  These are the offsets
+ * the framework's own exception handler reads: the reason as a word at
+ * 0x4008, then the syndrome as a full 64 bits at 0x4010, the faulting address
+ * at 0x4020 and the intermediate physical one at 0x4028.
+ *
+ * They were four bytes and then eight bytes out here, which put the syndrome
+ * on the tail of the reason and the addresses on each other.  Everything read
+ * as zero, and a library that cannot see a syndrome has to invent one: that
+ * is where the guesswork over trapped register accesses came from, and it was
+ * guessing about a value the kernel had already written down.
+ */
+#define OHV_RO_EXIT             0x4008
+#define OHV_RO_EXIT_REASON      0x4008
+#define OHV_RO_EXIT_ESR         0x4010
+#define OHV_RO_EXIT_FAR         0x4020
+#define OHV_RO_EXIT_HPFAR       0x4028
+#define OHV_RO_CONTROLS         OHV_L(ro_controls)  /* the kernel mirrors the controls */
+/*
+ * What of the shared copy the kernel says is currently good.  The framework
+ * tests a bit of this word before every system register it touches and syncs
+ * first when the bit is clear -- bit 0 for the banked registers, bit 61 for
+ * the extended ones -- which is what keeps a read off a mirror the guest has
+ * since moved past.  It is a validity mask, not a dirty one; reading a stale
+ * VBAR_EL1 out of it is how a VMM ends up with a value the architecture
+ * cannot hold.
+ */
+#define OHV_RO_STATE_VALID      OHV_L(ro_state_valid)
+#define OHV_RO_STATE_DIRTY      OHV_L(ro_state_dirty)
+#define OHV_RO_STATE_USED       OHV_L(ro_state_used)
+#define OHV_RO_ICH_VTR          OHV_L(ro_ich_vtr)       /* the three ICH words are 64 bits */
+#define OHV_RO_ICH_MISR         OHV_L(ro_ich_misr)
+#define OHV_RO_ICH_ELRSR        OHV_L(ro_ich_elrsr)
+#define OHV_RO_SVCR             OHV_L(ro_svcr)
+#define OHV_RO_SVL_B            OHV_L(ro_svl_b)
+#define OHV_RO_SME_PTR          OHV_L(ro_sme_ptr)
+#define OHV_RO_AMX_PTR          OHV_L(ro_amx_ptr)
+
+// state_dirty / state_used bits
+enum {
+    OHV_STATE_SYSREGS      = 1ull << 0,
+    OHV_STATE_DEBUG        = 1ull << 1,
+    OHV_STATE_CONTROLS     = 1ull << 2,
+    OHV_STATE_GIC          = 1ull << 3,
+    OHV_STATE_SME_CONTEXT  = 1ull << 4,
+    OHV_STATE_AMX_CONTEXT  = 1ull << 54,
+    OHV_STATE_APPLE_GENERIC_TIMER = 1ull << 55,
+    OHV_STATE_JITBOX       = 1ull << 56,
+    OHV_STATE_AMX          = 1ull << 57,
+    OHV_STATE_GXF          = 1ull << 58,
+    OHV_STATE_SPRR         = 1ull << 59,
+    OHV_STATE_PTRAUTH_APPLE= 1ull << 60,
+    OHV_STATE_PTRAUTH_ARM  = 1ull << 61,
+    OHV_STATE_CTRR         = 1ull << 62,
+    OHV_STATE_APPLE        = 1ull << 63,
+};
+
+// Typed views over the raw mapped pages.
+typedef struct {
+    uint64_t __head;         // 0x000, ahead of the register block
+    struct {
+        uint64_t x[29];      // x0 @ 0x008 .. x28 @ 0x0e8
+        uint64_t fp;         // 0x0f0
+        uint64_t lr;         // 0x0f8
+        uint64_t sp;         // 0x100
+        uint64_t pc;         // 0x108
+        uint32_t cpsr;       // 0x110
+        uint32_t pad;
+    } regs;
+    uint8_t __pad_to_neon[OHV_RW_NEON_Q0 - 0x118];
+    struct {
+        __uint128_t q[32];   // 0x140 .. 0x33f
+        uint32_t fpsr;       // 0x340
+        uint32_t fpcr;       // 0x344
+        uint32_t pad[2];
+    } neon;
+    ohv_shared_sysregs_t shared_sysregs;  // 0x350 (saved/restored every entry)
+    ohv_banked_sysregs_t banked_sysregs;  // 0x3b8 (dirty-tracked, opportunistic)
+} ohv_rw_page_head_t; // the head every layout shares; the rest via ohv_layout
+
+typedef struct {
+    uint32_t vmexit_reason;   /* +0x4008 */
+    uint32_t __pad;
+    uint64_t vmexit_esr;      /* +0x4010 */
+    uint64_t __unread;        /* +0x4018, whatever it is */
+    uint64_t vmexit_far;      /* +0x4020 */
+    uint64_t vmexit_hpfar;    /* +0x4028 */
+} ohv_vmexit_info_t;
+
+typedef struct {
+    uint64_t ver;
+    ohv_vmexit_info_t exit;
+} ohv_ro_page_t; // the head every layout shares; the rest via ohv_layout
+
+// Compile-time pinning of the load-bearing offsets.
+_Static_assert(offsetof(ohv_rw_page_head_t, regs.x[0]) == OHV_RW_REGS_X0, "x0 offset");
+_Static_assert(offsetof(ohv_rw_page_head_t, regs.fp) == OHV_RW_FP, "fp offset");
+_Static_assert(offsetof(ohv_rw_page_head_t, regs.pc) == OHV_RW_PC, "pc offset");
+_Static_assert(offsetof(ohv_rw_page_head_t, regs.cpsr) == OHV_RW_CPSR, "cpsr offset");
+_Static_assert(offsetof(ohv_rw_page_head_t, neon.q[0]) == OHV_RW_NEON_Q0, "q0 offset");
+_Static_assert(offsetof(ohv_rw_page_head_t, neon.fpsr) == OHV_RW_FPSR, "fpsr offset");
+_Static_assert(offsetof(ohv_rw_page_head_t, neon.fpcr) == OHV_RW_FPCR, "fpcr offset");
+_Static_assert(offsetof(ohv_rw_page_head_t, shared_sysregs) == OHV_RW_SHARED_SYSREGS, "shared base");
+_Static_assert(offsetof(ohv_rw_page_head_t, banked_sysregs) == OHV_RW_BANKED_SYSREGS, "banked base");
+_Static_assert(offsetof(ohv_ro_page_t, exit) == OHV_RO_EXIT - OHV_RO_PAGE_OFFSET, "exit base");
+/*
+ * Member places inside the blocks, which every layout keeps.  The extended
+ * register anchors were measured at 0xb68/0xb78/0xbb0 against extregs at
+ * 0xa10 (HANDOFF, 3.0.3); the timer word at 0x988 against controls at 0x920.
+ */
+_Static_assert(offsetof(ohv_controls_t, virtual_timer_offset) == 0x30, "vtimer offset anchor");
+_Static_assert(offsetof(ohv_controls_t, timer) == 0x68, "timer anchor");
+_Static_assert(offsetof(ohv_extregs_t, gxf_entry_el1) == 0x158, "gxf_entry anchor (HANDOFF)");
+_Static_assert(offsetof(ohv_extregs_t, sp_gl1) == 0x168, "sp_gl1 anchor (HANDOFF)");
+_Static_assert(offsetof(ohv_extregs_t, spsr_gl1) == 0x1a0, "spsr_gl1 anchor (HANDOFF)");
+_Static_assert(sizeof(ohv_extregs_t) == 83 * 8, "extregs size");
+/* The common prefix of each block a layout may lengthen. */
+_Static_assert(sizeof(ohv_banked_sysregs_t) == 192, "banked prefix (3.0.2 appends SCTLR2/TCR2)");
+_Static_assert(sizeof(ohv_dbgregs_t) == 544, "dbg block");
+_Static_assert(sizeof(ohv_vgic_sysregs_t) == 16, "vgic prefix (3.0.2 appends the LR timer)");
+_Static_assert(sizeof(ohv_controls_t) == 216, "controls prefix (3.0.4 appends the physical offset)");
+
+// In-page accessors (all bounds-checked callers-side).
+static inline volatile uint8_t *ohv_rw_byte(void *ctx, uint64_t off) {
+    return (volatile uint8_t *)((uint8_t *)ctx + off);
+}
+static inline volatile uint64_t *ohv_rw_u64(void *ctx, uint64_t off) {
+    return (volatile uint64_t *)((uint8_t *)ctx + off);
+}
+static inline volatile uint32_t *ohv_rw_u32(void *ctx, uint64_t off) {
+    return (volatile uint32_t *)((uint8_t *)ctx + off);
+}
+static inline volatile uint64_t *ohv_ro_u64(void *ctx, uint64_t off) {
+    return (volatile uint64_t *)((uint8_t *)ctx + off);
+}
+static inline volatile uint32_t *ohv_ro_u32(void *ctx, uint64_t off) {
+    return (volatile uint32_t *)((uint8_t *)ctx + off);
+}
+
+static inline ohv_rw_page_head_t *ohv_rw(void *ctx) { return (ohv_rw_page_head_t *)ctx; }
+static inline ohv_vmexit_info_t *ohv_exit_info(void *ctx) {
+    return (ohv_vmexit_info_t *)((uint8_t *)ctx + OHV_RO_EXIT);
+}
+static inline ohv_ro_page_t *ohv_ro(void *ctx) { return (ohv_ro_page_t *)((uint8_t *)ctx + OHV_RO_PAGE_OFFSET); }
+static inline ohv_controls_t *ohv_rw_controls(void *ctx) {
+    return (ohv_controls_t *)((uint8_t *)ctx + OHV_RW_CONTROLS);
+}
+static inline ohv_vgic_sysregs_t *ohv_rw_vgic(void *ctx) {
+    return (ohv_vgic_sysregs_t *)((uint8_t *)ctx + OHV_RW_VGIC_SYSREGS);
+}
+static inline uint16_t ohv_ro_svl_b(void *ctx) { return *(volatile uint16_t *)((uint8_t *)ctx + OHV_RO_SVL_B); }
+static inline void *ohv_ro_sme(void *ctx) { return *(void *volatile *)((uint8_t *)ctx + OHV_RO_SME_PTR); }
+static inline void *ohv_ro_amx(void *ctx) { return *(void *volatile *)((uint8_t *)ctx + OHV_RO_AMX_PTR); }
+static inline bool ohv_ver_ok(void *ctx, uint64_t expect) {
+    return *(volatile uint64_t *)((uint8_t *)ctx + OHV_RO_VER) == expect;
+}
+
+#ifdef __cplusplus
+}
+#endif
+#endif // OHV_CONTEXT_H
