@@ -66,6 +66,26 @@ extern "C" hv_return_t hv_vcpu_set_vtimer_offset(hv_vcpu_t id, uint64_t off) {
 
 extern "C" hv_return_t hv_vcpu_invalidate_tlb(hv_vcpu_t id, hv_tlbi_op_t op, uint64_t param) {
     VcpuSlot *s = owned_vcpu(id); if (!s) return HV_BAD_ARGUMENT;
-    ohv_vm_stage1_tlb_op_t a{ 0, (uint64_t)op, param };
+    uint64_t kernel_op;
+
+    /*
+     * Hypervisor.framework exposes architectural TLBI encodings here, while
+     * the kernel trap consumes PMAP_S1_TLB_OP_ ordinals.  Passing 0x18 for
+     * VMALLE1IS was therefore rejected as an out-of-range operation.
+     */
+    switch (op) {
+    case HV_TLBI_OP_ASIDE1IS:  kernel_op = kS1TlbAside1is; break;
+    case HV_TLBI_OP_VAE1IS:    kernel_op = kS1TlbVae1is; break;
+    case HV_TLBI_OP_VAAE1IS:   kernel_op = kS1TlbVaae1is; break;
+    case HV_TLBI_OP_VAALE1IS:  kernel_op = kS1TlbVaale1is; break;
+    case HV_TLBI_OP_VALE1IS:   kernel_op = kS1TlbVale1is; break;
+    case HV_TLBI_OP_VMALLE1IS: kernel_op = kS1TlbVmalle1is; break;
+    case HV_TLBI_OP_RVAE1IS:   kernel_op = kS1TlbRvae1is; break;
+    case HV_TLBI_OP_RVAAE1IS:  kernel_op = kS1TlbRvaae1is; break;
+    case HV_TLBI_OP_RVAALE1IS: kernel_op = kS1TlbRvaale1is; break;
+    case HV_TLBI_OP_RVALE1IS:  kernel_op = kS1TlbRvale1is; break;
+    default: return HV_BAD_ARGUMENT;
+    }
+    ohv_vm_stage1_tlb_op_t a{ 0, kernel_op, param };
     return ohv_raw_trap(OHV_TRAP_VM_STAGE1_TLB_OP, &a);
 }

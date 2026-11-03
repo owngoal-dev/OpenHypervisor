@@ -589,12 +589,6 @@ static hv_return_t sysreg_access(hv_vcpu_t id, uint16_t enc, uint64_t *value, bo
  * every TLBI is native, which is the behaviour that produced the corruption.
  * OHV_TRACE_TLBI prints the first replay and every 100,000th.
  */
-enum : uint64_t {
-    kS1TlbAside1is = 0, kS1TlbVae1is, kS1TlbVaae1is, kS1TlbVaale1is,
-    kS1TlbVale1is, kS1TlbVmalle1is, kS1TlbRvae1is, kS1TlbRvaae1is,
-    kS1TlbRvaale1is, kS1TlbRvale1is,
-};
-
 static const unsigned kTlbiSpacesMax = 16;
 static std::atomic<uint64_t> g_tlbi_spaces[kTlbiSpacesMax];
 static std::atomic<unsigned> g_tlbi_space_count{0};

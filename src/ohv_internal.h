@@ -24,6 +24,13 @@ extern uint32_t g_max_vcpus;
 
 constexpr uint64_t kMaxVcpuIds = 64; // vcpus_exit bitmask width
 
+/* pmap's stage-1 operation order, not the architectural TLBI encodings. */
+enum : uint64_t {
+    kS1TlbAside1is = 0, kS1TlbVae1is, kS1TlbVaae1is, kS1TlbVaale1is,
+    kS1TlbVale1is, kS1TlbVmalle1is, kS1TlbRvae1is, kS1TlbRvaae1is,
+    kS1TlbRvaale1is, kS1TlbRvale1is,
+};
+
 /*
  * The switches ohv_config.h sets, with the defaults the library has always
  * run with.  One word each: read relaxed on the vCPU threads -- a plain load
