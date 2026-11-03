@@ -75,7 +75,7 @@ static uint32_t machine_ipa_bits() {
     static bool have = false;
     if (!have) {
         ohv_capabilities_t caps{};
-        if (ohv_raw_trap(OHV_TRAP_CAPABILITIES, &caps) == HV_SUCCESS &&
+        if (ohv_read_capabilities(&caps) == HV_SUCCESS &&
             caps.ipa_bits_4k >= 24 && caps.ipa_bits_4k <= 52)
             cached = (uint32_t)caps.ipa_bits_4k;
         else

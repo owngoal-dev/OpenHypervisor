@@ -438,6 +438,27 @@ static inline ohv_rw_page_head_t *ohv_rw(void *ctx) { return (ohv_rw_page_head_t
 static inline ohv_vmexit_info_t *ohv_exit_info(void *ctx) {
     return (ohv_vmexit_info_t *)((uint8_t *)ctx + OHV_RO_EXIT);
 }
+/* Exit syndrome widened from 32 to 64 bits in 3.0.  Read the selected
+ * layout into a value rather than overlaying the 3.x struct on older pages.
+ */
+static inline uint64_t ohv_ro_field(void *ctx, ohv_hv_field_t field) {
+    if (field.size == 4) return *ohv_ro_u32(ctx, field.off);
+    return *ohv_ro_u64(ctx, field.off);
+}
+static inline ohv_vmexit_info_t ohv_read_exit_info(void *ctx) {
+    ohv_vmexit_info_t e = {0, 0, 0, 0, 0, 0};
+    e.vmexit_reason = (uint32_t)ohv_ro_field(ctx, ohv_layout->ro_exit_reason);
+    e.vmexit_esr = ohv_ro_field(ctx, ohv_layout->ro_exit_esr);
+    e.vmexit_far = ohv_ro_field(ctx, ohv_layout->ro_exit_far);
+    e.vmexit_hpfar = ohv_ro_field(ctx, ohv_layout->ro_exit_hpfar);
+    return e;
+}
+static inline bool ohv_is_legacy_gexit(const ohv_vmexit_info_t *e) {
+    return ohv_layout->ver == OHV_STATE_VER(2, 0, 1) &&
+           e->vmexit_reason == OHV_VMEXIT_SYNC &&
+           ((e->vmexit_esr >> 26) & 0x3f) == 0x3f &&
+           (e->vmexit_esr & 0x1ffffffull) == 0x22;
+}
 static inline ohv_ro_page_t *ohv_ro(void *ctx) { return (ohv_ro_page_t *)((uint8_t *)ctx + OHV_RO_PAGE_OFFSET); }
 static inline ohv_controls_t *ohv_rw_controls(void *ctx) {
     return (ohv_controls_t *)((uint8_t *)ctx + OHV_RW_CONTROLS);

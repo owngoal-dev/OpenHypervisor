@@ -1294,7 +1294,7 @@ static bool service_nv2_access(VcpuSlot *s, uint64_t esr) {
         uint64_t v = 0;
 
         if (!have) {
-            ohv_raw_trap(OHV_TRAP_CAPABILITIES, &caps);
+            ohv_read_capabilities(&caps);
             have = true;
         }
         if (op1 == 2) {                       /* CSSELR_EL1 */
@@ -2109,7 +2109,36 @@ static void enter_guest_el2(VcpuSlot *s, uint64_t esr, uint64_t return_pc) {
 }
 
 static ExitAction exit_from_ro(VcpuSlot *s) {
-    volatile ohv_vmexit_info_t *e = ohv_exit_info(s->ctx);
+    ohv_vmexit_info_t decoded = ohv_read_exit_info(s->ctx);
+    const ohv_vmexit_info_t *e = &decoded;
+
+    /* A real GEXIT restores APSTATE from ASPSR_GL1, independently of the
+     * architectural SPSR (whose bit 12 can be set on 2.0.1).  Passing it to
+     * QEMU's guarded-ERET shim mistakes that bit for "remain guarded" and
+     * SPTM's first return into XNU faults on instruction permissions.
+     * Keep the 3.x path unchanged; this is the raw GEXIT exit, before any
+     * guarded ERET is translated into a public exit later in this function.
+     */
+    if (ohv_is_legacy_gexit(e)) {
+        ohv_raw_trap(OHV_TRAP_VCPU_SYSREGS_SYNC, nullptr);
+        const uint64_t aspsr = *ohv_rw_u64(s->ctx, OHV_RW_EXTREGS + 47 * 8);
+        const uint64_t elr = *ohv_rw_u64(s->ctx, OHV_RW_EXTREGS + 51 * 8);
+        const uint64_t spsr = *ohv_rw_u64(s->ctx, OHV_RW_EXTREGS + 52 * 8);
+        hv_vcpu_set_reg(s->id, HV_REG_PC, elr);
+        hv_vcpu_set_reg(s->id, HV_REG_CPSR, spsr);
+        ohv_rw(s->ctx)->shared_sysregs.apstate = aspsr;
+        if (s->nv_off_for_geret) {
+            ohv_rw_controls(s->ctx)->hcr_el2 |= OHV_HCR_NV;
+            mark_dirty(s->ctx, OHV_STATE_CONTROLS);
+            s->nv_off_for_geret = false;
+        }
+        if (ohv_trace_on(OHV_TRACE_ERET)) {
+            fprintf(stderr, "[ohv] 2.0.1 GEXIT: pc %#llx spsr %#llx apstate %#llx\n",
+                    (unsigned long long)elr, (unsigned long long)spsr,
+                    (unsigned long long)aspsr);
+        }
+        return EXIT_KEEP_RUNNING;
+    }
 
     if (ohv_trace_on(OHV_TRACE_HCR)) {
         static unsigned shown[8];
@@ -3965,7 +3994,7 @@ static hv_return_t sysreg_access(hv_vcpu_t id, uint16_t enc, uint64_t *value, bo
                 static bool have = false;
 
                 if (!have) {
-                    ohv_raw_trap(OHV_TRAP_CAPABILITIES, &caps);
+                    ohv_read_capabilities(&caps);
                     have = true;
                 }
                 for (unsigned i = 0; i < 18; i++) {
@@ -5398,7 +5427,8 @@ static hv_return_t hv_vcpu_run_inner(hv_vcpu_t id) {
              ohv_ro(s->ctx)->exit.vmexit_reason == OHV_VMEXIT_UNHANDLED_FAULT) &&
             s->kernel_exits++ < 60) {
             ohv_rw_page_head_t *rw = ohv_rw(s->ctx);
-            ohv_vmexit_info_t *e = &ohv_ro(s->ctx)->exit;
+            ohv_vmexit_info_t decoded = ohv_read_exit_info(s->ctx);
+            const ohv_vmexit_info_t *e = &decoded;
 
             fprintf(stderr, "[ohv] vcpu %llu run #%llu -> %d, pc %#llx,"
                     " reason %u, esr %#llx, far %#llx,"

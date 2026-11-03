@@ -334,6 +334,7 @@ const SysRegDesc *sysreg_lookup_apple(uint16_t encoding);
  * exports under these names.
  */
 /* The capabilities snapshot, fetched once (ohv_caps_field.cpp). */
+hv_return_t ohv_read_capabilities(ohv_capabilities_t *caps);
 const ohv_capabilities_t *ohv_caps_cached();
 /* Set once the guest's PC first lands in the kernel (ohv_vcpu.cpp). */
 extern bool g_kernel_running;

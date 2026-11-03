@@ -30,6 +30,7 @@ own iPhone firmware as a nested EL2 guest.
 
 | macOS host | hv interface | Status |
 | :-- | :-- | :-- |
+| 26.1 (25B78) | 2.0.1 | local compatibility port; see `docs/layouts/25B5062e.json` for KDK layout provenance |
 | 26.6.2 | 3.0.0 | in use on the iphone-cli regression hosts |
 | 26A5388g (seed) | 3.0.4 | `tools/offset_probe`: every config field and the register block match, 14 of 18 trap ids directly; no drift |
 | any kernel reporting 3.0.0, 3.0.2, 3.0.3 or 3.0.4 | | covered by the vCPU context layout table |
@@ -57,6 +58,7 @@ Python 3 is needed only to regenerate the generated sources.
 make                       # libopenhyp.dylib + tests/smoke_bin + tests/smoke_static
 make tests                 # every probe under tests/
 make check                 # build the tests, then run each once
+make check-layouts         # capabilities/exit ABI fixtures; no VM or entitlement needed
 make offset_probe          # tools/offset_probe, the runtime offset matcher
 make install PREFIX=/opt/openhyp   # lib/libopenhyp.dylib + include/openhyp/*
 make uninstall PREFIX=/opt/openhyp
