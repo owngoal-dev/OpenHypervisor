@@ -222,6 +222,7 @@ struct VcpuSlot {
      */
     uint64_t monitor_tpidr_el2 = 0;
     uint64_t nested_hcr_seen = 0;   /* last guest HCR_EL2 this side printed */
+    bool nested_hcr_handoff_done = false;
     /*
      * The GL2 bank, s3_6_c15_c11_0..7, in the same order as GL1: SP, TPIDR,
      * VBAR, SPSR, ASPSR, ESR, ELR, FAR.  Kept here because the host's guest
