@@ -1,0 +1,49 @@
+macOS 26.1 / hypervisor interface 2.0.1 compatibility
+
+Host tested: Apple M3 Pro, macOS 26.1 build 25B78.
+Base OpenHypervisor commit: fc3200aad1cc9efb5af9117ed9fb66b57f3ee0f1.
+
+The context row comes from Apple Kernel Debug Kit 26.1 build 25B5062e,
+kernel.release.t6030 DWARF. Package signature: signed Apple Software.
+The mirror DMG SHA256 and extracted DWARF SHA256 are in layouts/25B5062e.json,
+with the extracted field offsets, sizes and block members. The installed
+25B78 Hypervisor.framework independently confirms the register/control write
+locations. The live kernel reports 0x2068797002000001. This is an exact
+version match; unknown versions remain refused.
+
+ABI differences implemented:
+- Trap-0 capabilities have no 64-byte prefix on 2.0.1. Normalize internally;
+  the exported raw trap retains the kernel representation. Validate the
+  architectural PFR0 EL0/EL1 and CTR RES1 fields before accepting either schema.
+- ESR is 32 bits at context+0x400c, followed by the trapped instruction at
+  +0x4010. FAR and HPFAR are +0x4018 and +0x4020. Read through the row instead
+  of overlaying the 3.x exit struct; 3.x retains the full 64-bit ESR.
+- ICH read-only registers are adjacent 32-bit fields. Respect their sizes.
+- The 26.1 framework masks ISAR1.I8MM in the config view too; match it.
+- A real synchronous GEXIT restores APSTATE from ASPSR_GL1 as well as PC and
+  CPSR. It differs from a guarded ERET. Passing it to QEMU's ERET shim leaves
+  SPTM's first return into XNU guarded and faults on instruction permissions.
+  The inline handler is restricted to interface 2.0.1 and synchronous exits;
+  an IRQ/host AST can carry a stale GEXIT syndrome and must not replay it.
+
+Checks:
+  make check-layouts
+The synthetic ABI fixtures cover both capabilities schemas, failure/unknown
+responses, the old ESR/instruction boundary, every retained 3.x exit row,
+32-bit ICH reads and stale GEXIT syndromes on asynchronous exits.
+
+Runtime: 12 feature registers match the installed Apple framework exactly.
+An EL1 guest and an EL2 guest execute MOV/MRS/STR, reading CurrentEL=8 at
+EL2, and produce identical MMIO syndrome, VA, PA, PC and X0 with OHV and Apple.
+The iPhone DFU chain completed a full iOS 27.0 / 24A437 restore (status 0,
+FINAL-MONITOR SUCCESS, zero panics). The installed NOR/LLB/iBoot chain booted
+XNU and launchd, and first-boot initialization settled after about 9.5 min
+without a panic. The consuming iphone-cli build directory retains the logs
+and matching NAND/SEP snapshot. Display validation is separate from these
+CPU/restore checks. A later consuming run with compiled shaders rendered
+the Setup Language page and accepted MTP scrolling, still without a panic.
+Some existing GPU shader lifts and idle/display sleep remain incomplete.
+
+3.x physical-host regressions were not available on this 26.1 machine.
+The 3.x layout rows and GEXIT path are retained; ABI fixtures cover their
+exit representation, and the existing config mask is retained on macOS 26.4+.

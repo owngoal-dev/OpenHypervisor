@@ -371,6 +371,19 @@ static std::atomic<uint64_t> g_guard_hi[OHV_GUARD_RANGES];
 std::atomic<bool> g_monitor_next{false};
 
 /*
+ * The nested HCR value the boot core actually carries into XNU.
+ *
+ * A physical secondary arrives with the same reset/monitor VHE host
+ * configuration as the boot core. The value can be established natively in
+ * the core's VNCR, without a trapped system-register access. The virtual
+ * board releases a secondary directly at the entry address XNU published, so
+ * that core misses the earlier setup. Keep the value observed on the boot
+ * core and let each secondary install it in its own VNCR page on its own
+ * thread, at the first XNU entry after leaving the guarded band.
+ */
+static std::atomic<uint64_t> g_nested_hcr_handoff{0};
+
+/*
  * The guest has stopped being a hypervisor, for the whole machine.
  *
  * Only the core that executes the ROM's handoff ERET goes through the
@@ -576,12 +589,6 @@ static hv_return_t sysreg_access(hv_vcpu_t id, uint16_t enc, uint64_t *value, bo
  * every TLBI is native, which is the behaviour that produced the corruption.
  * OHV_TRACE_TLBI prints the first replay and every 100,000th.
  */
-enum : uint64_t {
-    kS1TlbAside1is = 0, kS1TlbVae1is, kS1TlbVaae1is, kS1TlbVaale1is,
-    kS1TlbVale1is, kS1TlbVmalle1is, kS1TlbRvae1is, kS1TlbRvaae1is,
-    kS1TlbRvaale1is, kS1TlbRvale1is,
-};
-
 static const unsigned kTlbiSpacesMax = 16;
 static std::atomic<uint64_t> g_tlbi_spaces[kTlbiSpacesMax];
 static std::atomic<unsigned> g_tlbi_space_count{0};
@@ -1294,7 +1301,7 @@ static bool service_nv2_access(VcpuSlot *s, uint64_t esr) {
         uint64_t v = 0;
 
         if (!have) {
-            ohv_raw_trap(OHV_TRAP_CAPABILITIES, &caps);
+            ohv_read_capabilities(&caps);
             have = true;
         }
         if (op1 == 2) {                       /* CSSELR_EL1 */
@@ -2109,7 +2116,36 @@ static void enter_guest_el2(VcpuSlot *s, uint64_t esr, uint64_t return_pc) {
 }
 
 static ExitAction exit_from_ro(VcpuSlot *s) {
-    volatile ohv_vmexit_info_t *e = ohv_exit_info(s->ctx);
+    ohv_vmexit_info_t decoded = ohv_read_exit_info(s->ctx);
+    const ohv_vmexit_info_t *e = &decoded;
+
+    /* A real GEXIT restores APSTATE from ASPSR_GL1, independently of the
+     * architectural SPSR (whose bit 12 can be set on 2.0.1).  Passing it to
+     * QEMU's guarded-ERET shim mistakes that bit for "remain guarded" and
+     * SPTM's first return into XNU faults on instruction permissions.
+     * Keep the 3.x path unchanged; this is the raw GEXIT exit, before any
+     * guarded ERET is translated into a public exit later in this function.
+     */
+    if (ohv_is_legacy_gexit(e)) {
+        ohv_raw_trap(OHV_TRAP_VCPU_SYSREGS_SYNC, nullptr);
+        const uint64_t aspsr = *ohv_rw_u64(s->ctx, OHV_RW_EXTREGS + 47 * 8);
+        const uint64_t elr = *ohv_rw_u64(s->ctx, OHV_RW_EXTREGS + 51 * 8);
+        const uint64_t spsr = *ohv_rw_u64(s->ctx, OHV_RW_EXTREGS + 52 * 8);
+        hv_vcpu_set_reg(s->id, HV_REG_PC, elr);
+        hv_vcpu_set_reg(s->id, HV_REG_CPSR, spsr);
+        ohv_rw(s->ctx)->shared_sysregs.apstate = aspsr;
+        if (s->nv_off_for_geret) {
+            ohv_rw_controls(s->ctx)->hcr_el2 |= OHV_HCR_NV;
+            mark_dirty(s->ctx, OHV_STATE_CONTROLS);
+            s->nv_off_for_geret = false;
+        }
+        if (ohv_trace_on(OHV_TRACE_ERET)) {
+            fprintf(stderr, "[ohv] 2.0.1 GEXIT: pc %#llx spsr %#llx apstate %#llx\n",
+                    (unsigned long long)elr, (unsigned long long)spsr,
+                    (unsigned long long)aspsr);
+        }
+        return EXIT_KEEP_RUNNING;
+    }
 
     if (ohv_trace_on(OHV_TRACE_HCR)) {
         static unsigned shown[8];
@@ -3207,6 +3243,9 @@ extern "C" hv_return_t hv_vcpu_create(hv_vcpu_t *vcpu_out, hv_vcpu_exit_t **exit
     for (uint64_t i = 0; i < kMaxVcpuIds; i++)
         if (!g_vcpus[i].used) { id = i; break; }
     if (id == kMaxVcpuIds) { pthread_mutex_unlock(&g_vcpus_mutex); return HV_NO_RESOURCES; }
+    if (id == 0) {
+        g_nested_hcr_handoff.store(0, std::memory_order_relaxed);
+    }
 
     ohv_vcpu_create_t args{ id, 0 };
     hv_return_t r = ohv_raw_trap(OHV_TRAP_VCPU_CREATE, &args);
@@ -3965,7 +4004,7 @@ static hv_return_t sysreg_access(hv_vcpu_t id, uint16_t enc, uint64_t *value, bo
                 static bool have = false;
 
                 if (!have) {
-                    ohv_raw_trap(OHV_TRAP_CAPABILITIES, &caps);
+                    ohv_read_capabilities(&caps);
                     have = true;
                 }
                 for (unsigned i = 0; i < 18; i++) {
@@ -5355,6 +5394,50 @@ static hv_return_t hv_vcpu_run_inner(hv_vcpu_t id) {
          */
         {
             volatile uint64_t *nh = ohv_rw_u64(s->ctx, OHV_NESTED_HCR_EL2);
+            uint64_t pc = ohv_rw(s->ctx)->regs.pc;
+            uint64_t handoff;
+
+            if (s->id == 0 &&
+                (*nh & (OHV_HCR_E2H | OHV_HCR_TGE)) ==
+                    (OHV_HCR_E2H | OHV_HCR_TGE) &&
+                g_nested_hcr_handoff.load(std::memory_order_relaxed) != *nh) {
+                g_nested_hcr_handoff.store(*nh, std::memory_order_release);
+                if (ohv_trace_on(OHV_TRACE_NESTED)) {
+                    fprintf(stderr, "[ohv] boot core finalized guest"
+                            " HCR_EL2 %#llx at pc %#llx\n",
+                            (unsigned long long)*nh,
+                            (unsigned long long)pc);
+                }
+            }
+            handoff = g_nested_hcr_handoff.load(std::memory_order_acquire);
+
+            /*
+             * Inherit only at the monitor-to-XNU boundary. At the low iBoot
+             * epilogue this would be too early, and inside the guarded band
+             * SPTM must still see and validate the reset value. Once a high
+             * non-guarded PC is reached, an untouched reset value means this
+             * core was released directly into XNU and missed earlier setup.
+             */
+            if (!s->nested_hcr_handoff_done &&
+                g_monitor_next.load(std::memory_order_relaxed) &&
+                pc >= 0xfffffff000000000ull && !ohv_pc_guarded(pc) &&
+                handoff != 0) {
+                if (*nh == ohv_nested_reset_hcr()) {
+                    *nh = handoff;
+                    s->nested_hcr_seen = handoff;
+                    if (ohv_trace_on(OHV_TRACE_NESTED)) {
+                        fprintf(stderr, "[ohv] vcpu %llu inherited guest"
+                                " HCR_EL2 %#llx at XNU pc %#llx\n",
+                                (unsigned long long)s->id,
+                                (unsigned long long)handoff,
+                                (unsigned long long)pc);
+                    }
+                }
+                if ((*nh & (OHV_HCR_E2H | OHV_HCR_TGE)) ==
+                    (OHV_HCR_E2H | OHV_HCR_TGE)) {
+                    s->nested_hcr_handoff_done = true;
+                }
+            }
 
             if (*nh != s->nested_hcr_seen) {
                 if (ohv_trace_on(OHV_TRACE_NESTED)) {
@@ -5398,7 +5481,8 @@ static hv_return_t hv_vcpu_run_inner(hv_vcpu_t id) {
              ohv_ro(s->ctx)->exit.vmexit_reason == OHV_VMEXIT_UNHANDLED_FAULT) &&
             s->kernel_exits++ < 60) {
             ohv_rw_page_head_t *rw = ohv_rw(s->ctx);
-            ohv_vmexit_info_t *e = &ohv_ro(s->ctx)->exit;
+            ohv_vmexit_info_t decoded = ohv_read_exit_info(s->ctx);
+            const ohv_vmexit_info_t *e = &decoded;
 
             fprintf(stderr, "[ohv] vcpu %llu run #%llu -> %d, pc %#llx,"
                     " reason %u, esr %#llx, far %#llx,"

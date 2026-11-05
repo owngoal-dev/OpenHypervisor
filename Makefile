@@ -87,7 +87,8 @@ tools/offset_probe: tools/offset_probe.cpp
 clean:
 	rm -f $(OBJS) $(DEPS) libopenhyp.dylib tests/libopenhyp.dylib \
 	      tests/smoke_bin tests/smoke_static tests/*.d \
-	      $(RAW_BINS) $(FW_BINS) $(OHV_BINS) tools/offset_probe
+	      $(RAW_BINS) $(FW_BINS) $(OHV_BINS) tools/offset_probe \
+	      tests/context_layout_tests tests/capabilities_layout_tests
 	rm -rf tests/*.dSYM tools/*.dSYM
 
 # Build every test, then run each once (tools/run-tests.sh).
@@ -113,3 +114,14 @@ uninstall:
 	rm -rf $(INCDIR)
 
 .PHONY: all tests check clean smoke smoke_static offset_probe install uninstall
+
+.PHONY: check-layouts
+check-layouts: tests/context_layout_tests tests/capabilities_layout_tests
+	./tests/context_layout_tests
+	./tests/capabilities_layout_tests
+
+tests/context_layout_tests: tests/context_layout_tests.cpp include/openhyp/ohv_context.h include/openhyp/ohv_hv_layouts.h
+	$(CC) $(CXXFLAGS) -o $@ $<
+
+tests/capabilities_layout_tests: tests/capabilities_layout_tests.cpp src/ohv_caps_field.cpp src/ohv_internal.h include/openhyp/ohv_core.h
+	$(CC) $(CXXFLAGS) -o $@ tests/capabilities_layout_tests.cpp src/ohv_caps_field.cpp

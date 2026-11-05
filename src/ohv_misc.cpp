@@ -70,8 +70,15 @@ extern "C" uint64_t ohv_id_reg_for(const ohv_capabilities_t *c, unsigned which, 
         case 0:  return (c->id_aa64dfr0_el1 & 0xF0F0F000ull) | 6;
         case 1:  return 0;                                   /* DFR1  */
         case 2:  return c->id_aa64isar0_el1 & 0xFFFFFFFFF0FFFFF0ull;
-        case 3:  return c->id_aa64isar1_el1 &
-                        (for_config ? 0x00F0FFFFFFFFFFFFull : 0x0000FFFFFFFFFFFFull);
+        case 3: {
+            /* 26.1's framework also masks I8MM in the config view.
+             * Measured by feature-probe against the installed framework. */
+            uint64_t mask = 0x0000FFFFFFFFFFFFull;
+            if (for_config) {
+                if (__builtin_available(macOS 26.4, *)) mask = 0x00F0FFFFFFFFFFFFull;
+            }
+            return c->id_aa64isar1_el1 & mask;
+        }
         case 4:  return (c->id_aa64mmfr0_el1 & 0x0000F000FFF000F0ull) |
                         parange_field();
         case 5:  return c->id_aa64mmfr1_el1 & 0x0000F000FFFFF0F0ull;
@@ -196,7 +203,7 @@ extern "C" hv_return_t hv_vcpu_config_get_ccsidr_el1_sys_reg_values(
 ) {
     if (!c || !v) return HV_BAD_ARGUMENT;
     ohv_capabilities_t caps{};
-    if (ohv_raw_trap(OHV_TRAP_CAPABILITIES, &caps) != HV_SUCCESS) return HV_ERROR;
+    if (ohv_read_capabilities(&caps) != HV_SUCCESS) return HV_ERROR;
     const uint64_t *src = (t == HV_CACHE_TYPE_INSTRUCTION) ? caps.ccsidr_el1_inst : caps.ccsidr_el1_data_or_unified;
     for (int i = 0; i < 8; i++) v[i] = src[i];
     return HV_SUCCESS;
@@ -440,7 +447,7 @@ extern "C" hv_return_t __hv_vm_stage1_tlb_op(hv_vm_space_t space, uint64_t op, u
 extern "C" hv_return_t __hv_capability(hv_capability_t cap, uint64_t *value) {
     if (!value) return HV_BAD_ARGUMENT;
     ohv_capabilities_t caps{};
-    hv_return_t r = ohv_raw_trap(OHV_TRAP_CAPABILITIES, &caps);
+    hv_return_t r = ohv_read_capabilities(&caps);
     if (r != HV_SUCCESS) return r;
     switch (cap) {
         case HV_CAP_VCPUMAX: *value = 64; break;

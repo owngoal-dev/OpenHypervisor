@@ -314,9 +314,9 @@ extern "C" hv_return_t hv_gic_get_ich_reg(hv_vcpu_t id, hv_gic_ich_reg_t reg, ui
     if (!sparse_slot(enc, kIchEncodings, ARRAY_COUNT(kIchEncodings), &slot))
         return HV_BAD_ARGUMENT;
     switch (enc) {
-        case ICH_VTR:   *value = *ohv_ro_u64(s->ctx, OHV_RO_ICH_VTR);   return HV_SUCCESS;
-        case ICH_MISR:  *value = *ohv_ro_u64(s->ctx, OHV_RO_ICH_MISR);  return HV_SUCCESS;
-        case ICH_ELRSR: *value = *ohv_ro_u64(s->ctx, OHV_RO_ICH_ELRSR); return HV_SUCCESS;
+        case ICH_VTR:   *value = ohv_ro_field(s->ctx, ohv_layout->ro_ich_vtr);   return HV_SUCCESS;
+        case ICH_MISR:  *value = ohv_ro_field(s->ctx, ohv_layout->ro_ich_misr);  return HV_SUCCESS;
+        case ICH_ELRSR: *value = ohv_ro_field(s->ctx, ohv_layout->ro_ich_elrsr); return HV_SUCCESS;
         case ICH_AP0R0: *value = ohv_rw_vgic(s->ctx)->ich_ap0r0_el2; return HV_SUCCESS;
         case ICH_AP1R0: *value = ohv_rw_vgic(s->ctx)->ich_ap1r0_el2; return HV_SUCCESS;
         case ICH_HCR:   *value = ohv_rw_controls(s->ctx)->ich_hcr_el2;  return HV_SUCCESS;
